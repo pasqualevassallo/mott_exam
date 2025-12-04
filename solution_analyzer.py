@@ -213,30 +213,45 @@ def compute_hypervolume_evolution(solution_files, ref_point=[1.2, 1.4]):
 
 # Esempio d'uso
 if __name__ == "__main__":
-    # Lista i file .npz nella directory corrente
-    solution_files = list(Path('.').glob('quantcomm*.npz'))
+    import sys
     
-    if not solution_files:
-        print("Nessun file .npz trovato nella directory corrente")
-        print("Assicurati di essere nella directory dove sono salvate le soluzioni")
-    else:
-        print(f"Trovati {len(solution_files)} file di soluzione")
-        
-        # Ordina per nome
-        solution_files = sorted(solution_files)
-        
-        # Visualizza tutti i fronti insieme
-        if len(solution_files) > 1:
-            plot_pareto_fronts(solution_files[:5],  # mostra max 5 per leggibilità
-                              title="Confronto Fronti di Pareto",
-                              save_path="pareto_comparison.png")
-        
-        # Visualizza dettagli dell'ultima soluzione
-        if solution_files:
-            plot_single_pareto(solution_files[-1], 
-                             title=f"Analisi Dettagliata: {solution_files[-1].stem}",
-                             save_path="pareto_detail.png")
-        
-        # Evoluzione hypervolume
-        if len(solution_files) > 1:
-            compute_hypervolume_evolution(solution_files)
+    if len(sys.argv) < 2:
+        print("Uso: python script.py <file.npz>")
+        print("Esempio: python script.py quantcomm_1_100_6372134.npz")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    
+    if not Path(file_path).exists():
+        print(f"Errore: file '{file_path}' non trovato")
+        sys.exit(1)
+    
+    print(f"Analizzando: {file_path}")
+    
+    # Carica e visualizza la soluzione
+    xs, ys = load_solution(file_path)
+    objectives = ys[:, :2] if ys.shape[1] > 2 else ys
+    
+    print(f"Numero di soluzioni: {len(objectives)}")
+    print(f"Obiettivo 1 - Range: [{objectives[:, 0].min():.4f}, {objectives[:, 0].max():.4f}]")
+    print(f"Obiettivo 2 - Range: [{objectives[:, 1].min():.4f}, {objectives[:, 1].max():.4f}]")
+    
+    # Calcola hypervolume se possibile
+    try:
+        import pygmo as pg
+        ref_point = np.array([1.2, 1.4])
+        valid = [obj for obj in objectives if all(obj <= ref_point)]
+        if len(valid) > 0:
+            hv = pg.hypervolume(valid)
+            hv_value = hv.compute(ref_point) * 10000
+            print(f"Hypervolume: {hv_value:.2f}")
+    except ImportError:
+        print("(Pygmo non disponibile per calcolo hypervolume)")
+    
+    # Visualizza analisi dettagliata
+    file_name = Path(file_path).stem
+    plot_single_pareto(file_path, 
+                      title=f"Analisi Fronte di Pareto: {file_name}",
+                      save_path=f"{file_name}_analysis.png")
+    
+    print(f"\nGrafico salvato come: {file_name}_analysis.png")
