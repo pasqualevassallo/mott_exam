@@ -1009,7 +1009,7 @@ def export_to_csv(xs, ys, filename='soluzioni_pareto.csv'):
 if __name__ == '__main__':
     
     # CARICA IL FILE (sostituisci con il tuo file .npz)
-    filename = 'quantcomm_1_100_6372134.npz'  # O il file più recente generato
+    filename = 'quantcomm_639739.npz'  # O il file più recente generato
     
     try:
         xs, ys = load_solutions(filename)
