@@ -1009,7 +1009,7 @@ def export_to_csv(xs, ys, filename='soluzioni_pareto.csv'):
 if __name__ == '__main__':
     
     # CARICA IL FILE (sostituisci con il tuo file .npz)
-    filename = 'quantcomm_639739.npz'
+    filename = 'quantcomm_1_100_6372134.npz'  # O il file più recente generato
     
     try:
         xs, ys = load_solutions(filename)
@@ -1043,3 +1043,5 @@ if __name__ == '__main__':
         print(f"❌ File {filename} non trovato!")
         print("   Assicurati che l'ottimizzazione abbia generato il file .npz")
         print("   I file vengono salvati nella directory corrente con nomi tipo:")
+        print("   - quantcomm_6372134.npz")
+        print("   - quantcomm_1_100_6372134.npz")
