@@ -1,156 +1,290 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from pathlib import Path
-import seaborn as sns
-import sys
+import pandas as pd
 
-def is_dominated(point, other_points):
-    """Verifica se un punto è dominato da altri punti"""
-    for other in other_points:
-        if all(other <= point) and any(other < point):
-            return True
-    return False
+# ============================================
+# CARICA LE SOLUZIONI DAL FILE .npz
+# ============================================
 
-def find_pareto_front(objectives):
-    """Trova il fronte di Pareto da un set di obiettivi"""
-    pareto_mask = np.ones(len(objectives), dtype=bool)
-    
-    for i, point in enumerate(objectives):
-        if pareto_mask[i]:
-            # Rimuovi dalla maschera tutti i punti dominati da questo
-            other_points = objectives[pareto_mask]
-            other_indices = np.where(pareto_mask)[0]
-            
-            for j, other in zip(other_indices, other_points):
-                if i != j:
-                    if all(point <= other) and any(point < other):
-                        pareto_mask[j] = False
-    
-    return pareto_mask
+def load_solutions(filename):
+    """Carica le soluzioni dal file .npz"""
+    with np.load(filename) as data:
+        xs = data['xs']  # Parametri orbitali
+        ys = data['ys']  # Obiettivi (f1, f2, [c1, c2])
+    return xs, ys
 
-def plot_solutions_and_pareto(file_path, dark_mode=True):
-    """
-    Visualizza tutte le soluzioni dal file .npz e evidenzia il fronte di Pareto
+# ============================================
+# ANALIZZA I PARAMETRI ORBITALI
+# ============================================
+
+def decode_solution(x):
+    """Decodifica una soluzione in parametri leggibili"""
+    params = {
+        # Walker Constellation 1
+        'W1_semiasse_maggiore_km': x[0] * 6371,  # a1 normalizzato
+        'W1_eccentricita': x[1],
+        'W1_inclinazione_deg': np.degrees(x[2]),
+        'W1_arg_perigeo_deg': np.degrees(x[3]),
+        'W1_qualita_eta': x[4],
+        
+        # Walker Constellation 2
+        'W2_semiasse_maggiore_km': x[5] * 6371,  # a2 normalizzato
+        'W2_eccentricita': x[6],
+        'W2_inclinazione_deg': np.degrees(x[7]),
+        'W2_arg_perigeo_deg': np.degrees(x[8]),
+        'W2_qualita_eta': x[9],
+        
+        # Configurazione Walker 1
+        'W1_sat_per_piano': int(x[10]),
+        'W1_num_piani': int(x[11]),
+        'W1_phasing': int(x[12]),
+        'W1_tot_satelliti': int(x[10]) * int(x[11]),
+        
+        # Configurazione Walker 2
+        'W2_sat_per_piano': int(x[13]),
+        'W2_num_piani': int(x[14]),
+        'W2_phasing': int(x[15]),
+        'W2_tot_satelliti': int(x[13]) * int(x[14]),
+        
+        # Rovers
+        'rover_indices': [int(x[16]), int(x[17]), int(x[18]), int(x[19])],
+        
+        # Totali
+        'satelliti_totali': int(x[10])*int(x[11]) + int(x[13])*int(x[14])
+    }
+    return params
+
+# ============================================
+# VISUALIZZA IL FRONTE DI PARETO
+# ============================================
+
+def filter_valid_pareto(xs, ys):
+    """Filtra solo soluzioni Pareto-ottime che rispettano i vincoli"""
     
-    Args:
-        file_path: path al file .npz
-        dark_mode: usa sfondo scuro
-    """
+    # Step 1: Filtra vincoli (se presenti)
+    if ys.shape[1] > 2:
+        valid_mask = (ys[:, 2] <= 0) & (ys[:, 3] <= 0)
+        xs_valid = xs[valid_mask]
+        ys_valid = ys[valid_mask]
+        print(f"   Filtro vincoli: {len(xs)} → {len(xs_valid)} soluzioni")
+    else:
+        xs_valid = xs
+        ys_valid = ys
+        print(f"   Nessun vincolo da filtrare")
     
-    # Carica il file
-    with np.load(file_path) as data:
-        xs = data['xs']
-        ys = data['ys']
+    # Step 2: Estrai solo Pareto-ottime
+    def is_dominated(sol, others):
+        for other in others:
+            if np.all(other[:2] <= sol[:2]) and np.any(other[:2] < sol[:2]):
+                return True
+        return False
     
-    # Estrai gli obiettivi (prime 2 colonne)
-    objectives = ys[:, :2] if ys.shape[1] > 2 else ys
+    pareto_mask = []
+    for i, sol in enumerate(ys_valid):
+        others = np.delete(ys_valid, i, axis=0)
+        pareto_mask.append(not is_dominated(sol, others))
     
-    # Trova il fronte di Pareto
-    pareto_mask = find_pareto_front(objectives)
-    pareto_points = objectives[pareto_mask]
-    non_pareto_points = objectives[~pareto_mask]
+    pareto_mask = np.array(pareto_mask)
+    xs_pareto = xs_valid[pareto_mask]
+    ys_pareto = ys_valid[pareto_mask]
     
-    # Setup plot
-    if dark_mode:
-        plt.style.use('dark_background')
+    print(f"   Filtro Pareto: {len(xs_valid)} → {len(xs_pareto)} soluzioni")
     
-    fig, ax = plt.subplots(figsize=(12, 8))
+    return xs_pareto, ys_pareto
+
+def plot_pareto_front(ys, filename='pareto_front.png'):
+    """Visualizza il fronte di Pareto"""
+    plt.figure(figsize=(10, 6))
     
-    # Plot soluzioni non-Pareto (in grigio/trasparente)
-    if len(non_pareto_points) > 0:
-        ax.scatter(non_pareto_points[:, 0], non_pareto_points[:, 1], 
-                  c='gray', s=50, alpha=0.3, label='Soluzioni dominate', 
-                  edgecolors='none')
+    # Estrai solo f1 e f2 (ignora eventuali vincoli)
+    f1 = ys[:, 0]
+    f2 = ys[:, 1]
     
-    # Plot fronte di Pareto (evidenziato)
-    ax.scatter(pareto_points[:, 0], pareto_points[:, 1], 
-              c='cyan', s=100, alpha=0.8, label='Fronte di Pareto',
-              edgecolors='white', linewidth=1.5, zorder=5)
+    plt.scatter(f1, f2, alpha=0.6, s=50, c='blue', edgecolors='white', linewidth=1)
+    plt.xlabel('f1: Costo Comunicazione (normalizzato)', fontsize=12)
+    plt.ylabel('f2: Costo Infrastruttura (normalizzato)', fontsize=12)
+    plt.title('Fronte di Pareto - Soluzioni Ottimali', fontsize=14)
+    plt.grid(True, alpha=0.3)
     
-    # Connetti i punti del fronte di Pareto
-    sorted_indices = np.argsort(pareto_points[:, 0])
-    sorted_pareto = pareto_points[sorted_indices]
-    ax.plot(sorted_pareto[:, 0], sorted_pareto[:, 1], 
-           'c--', alpha=0.5, linewidth=2, zorder=4)
+    # Aggiungi punto di riferimento
+    plt.axvline(x=1.2, color='r', linestyle='--', alpha=0.3, label='Ref point')
+    plt.axhline(y=1.4, color='r', linestyle='--', alpha=0.3)
     
-    # Reference point
-    ref_point = np.array([1.2, 1.4])
-    ax.scatter(ref_point[0], ref_point[1], 
-              c='red', s=300, marker='*', 
-              label='Reference Point', zorder=6, 
-              edgecolors='yellow', linewidth=2)
-    
-    # Linee tratteggiate dal reference point
-    ax.axvline(x=ref_point[0], color='red', linestyle=':', alpha=0.3, linewidth=1)
-    ax.axhline(y=ref_point[1], color='red', linestyle=':', alpha=0.3, linewidth=1)
-    
-    # Labels e titolo
-    ax.set_xlabel('Obiettivo 1: Costo Comunicazione Medio', fontsize=14, fontweight='bold')
-    ax.set_ylabel('Obiettivo 2: Costo Infrastruttura', fontsize=14, fontweight='bold')
-    
-    file_name = Path(file_path).stem
-    ax.set_title(f'Soluzioni e Fronte di Pareto - {file_name}', 
-                fontsize=16, fontweight='bold', pad=20)
-    
-    # Statistiche nel plot
-    stats_text = f'Soluzioni totali: {len(objectives)}\n'
-    stats_text += f'Fronte di Pareto: {len(pareto_points)}\n'
-    stats_text += f'Dominate: {len(non_pareto_points)}'
-    
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-           fontsize=11, verticalalignment='top',
-           bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
-           color='white')
-    
-    ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
-    ax.grid(True, alpha=0.3, linestyle='--')
-    
+    plt.legend()
     plt.tight_layout()
-    
-    # Salva
-    output_name = f"{file_name}_pareto_front.png"
-    plt.savefig(output_name, dpi=300, bbox_inches='tight')
-    print(f"Grafico salvato: {output_name}")
-    
+    plt.savefig(filename, dpi=300)
     plt.show()
     
-    # Stampa statistiche
-    print("\n" + "="*60)
-    print(f"ANALISI FILE: {file_name}")
-    print("="*60)
-    print(f"Soluzioni totali: {len(objectives)}")
-    print(f"Soluzioni sul fronte di Pareto: {len(pareto_points)} ({len(pareto_points)/len(objectives)*100:.1f}%)")
-    print(f"Soluzioni dominate: {len(non_pareto_points)} ({len(non_pareto_points)/len(objectives)*100:.1f}%)")
-    print("\nFronte di Pareto - Range obiettivi:")
-    print(f"  Obiettivo 1: [{pareto_points[:, 0].min():.4f}, {pareto_points[:, 0].max():.4f}]")
-    print(f"  Obiettivo 2: [{pareto_points[:, 1].min():.4f}, {pareto_points[:, 1].max():.4f}]")
+    print(f"Grafico salvato in: {filename}")
+
+# ============================================
+# TROVA LE SOLUZIONI "MIGLIORI"
+# ============================================
+
+def find_best_solutions(xs, ys):
+    """Identifica soluzioni notevoli nel fronte di Pareto"""
     
-    # Calcola hypervolume se possibile
+    f1 = ys[:, 0]
+    f2 = ys[:, 1]
+    
+    # 1. Soluzione con miglior comunicazione (minimo f1)
+    idx_best_comm = np.argmin(f1)
+    
+    # 2. Soluzione con minor costo (minimo f2)
+    idx_best_cost = np.argmin(f2)
+    
+    # 3. Soluzione "bilanciata" (minima distanza euclidea dall'origine)
+    distances = np.sqrt(f1**2 + f2**2)
+    idx_balanced = np.argmin(distances)
+    
+    solutions = {
+        'Migliore Comunicazione': (xs[idx_best_comm], ys[idx_best_comm]),
+        'Minor Costo': (xs[idx_best_cost], ys[idx_best_cost]),
+        'Bilanciata': (xs[idx_balanced], ys[idx_balanced])
+    }
+    
+    return solutions
+
+# ============================================
+# ESPORTA IN CSV PER ANALISI
+# ============================================
+
+def export_to_csv(xs, ys, filename='soluzioni_pareto.csv'):
+    """Esporta tutte le soluzioni in CSV"""
+    
+    data = []
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        params = decode_solution(x)
+        row = {
+            'ID': i,
+            'f1_comunicazione': y[0],
+            'f2_costo': y[1],
+            **params
+        }
+        data.append(row)
+    
+    df = pd.DataFrame(data)
+    df.to_csv(filename, index=False)
+    print(f"CSV esportato in: {filename}")
+    return df
+
+# ============================================
+# ESEMPIO DI UTILIZZO
+# ============================================
+
+# ============================================
+# TROVA AUTOMATICAMENTE IL FILE MIGLIORE
+# ============================================
+
+def find_best_file(directory='.'):
+    """Trova automaticamente il file .npz con l'ipervolume più alto"""
+    import os
+    import re
+    
+    pattern = re.compile(r'quantcomm.*?(\d+)\.npz
+        print(f"✓ Caricate {len(xs)} soluzioni dal file {filename}")
+        print(f"  - Dimensione xs: {xs.shape}")
+        print(f"  - Dimensione ys: {ys.shape}\n")
+        
+        # VISUALIZZA IL FRONTE DI PARETO
+        plot_pareto_front(ys)
+        
+        # TROVA SOLUZIONI NOTEVOLI
+        print("\n" + "="*60)
+        print("SOLUZIONI NOTEVOLI NEL FRONTE DI PARETO")
+        print("="*60)
+        
+        best_sols = find_best_solutions(xs, ys)
+        
+        for name, (x, y) in best_sols.items():
+            print(f"\n▶ {name}:")
+            print(f"  Obiettivi: f1={y[0]:.4f}, f2={y[1]:.4f}")
+            params = decode_solution(x)
+            print(f"  Satelliti totali: {params['satelliti_totali']}")
+            print(f"  W1: {params['W1_tot_satelliti']} sat (η={params['W1_qualita_eta']:.1f})")
+            print(f"  W2: {params['W2_tot_satelliti']} sat (η={params['W2_qualita_eta']:.1f})")
+        
+        # ESPORTA TUTTO IN CSV
+        print("\n" + "="*60)
+        df = export_to_csv(xs, ys)
+        print(f"\nPrime 5 soluzioni:")
+        print(df[['ID', 'f1_comunicazione', 'f2_costo', 'satelliti_totali']].head())
+        
+    except FileNotFoundError:
+        print(f"❌ File {filename} non trovato!")
+        print("   Assicurati che l'ottimizzazione abbia generato il file .npz")
+        print("   I file vengono salvati nella directory corrente con nomi tipo:")
+        print("   - quantcomm_6372134.npz")
+        print("   - quantcomm_1_100_6372134.npz")
+)
+    best_hv = -1
+    best_file = None
+    
+    for filename in os.listdir(directory):
+        match = pattern.match(filename)
+        if match:
+            hv = int(match.group(1))
+            if hv > best_hv:
+                best_hv = hv
+                best_file = filename
+    
+    if best_file:
+        print(f"✓ File migliore trovato: {best_file}")
+        print(f"  Ipervolume: {best_hv / 10000:.2f}")
+        return best_file, best_hv
+    else:
+        return None, None
+
+if __name__ == '__main__':
+    
+    # TROVA AUTOMATICAMENTE IL FILE MIGLIORE
+    filename, hv = find_best_file('.')
+    
+    if filename is None:
+        print("❌ Nessun file quantcomm_*.npz trovato nella directory corrente!")
+        print("   Verifica che l'ottimizzazione abbia generato i file.")
+        exit(1)
+    
     try:
-        import pygmo as pg
-        valid = [obj for obj in pareto_points if all(obj <= ref_point)]
-        if len(valid) > 0:
-            hv = pg.hypervolume(valid)
-            hv_value = hv.compute(ref_point) * 10000
-            print(f"\nHypervolume: {hv_value:.2f}")
-    except ImportError:
-        pass
-    
-    print("="*60)
-    
-    return fig, ax, pareto_points, non_pareto_points
-
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Uso: python script.py <file.npz>")
-        print("Esempio: python script.py quantcomm_639739.npz")
-        sys.exit(1)
-    
-    file_path = sys.argv[1]
-    
-    if not Path(file_path).exists():
-        print(f"Errore: file '{file_path}' non trovato")
-        sys.exit(1)
-    
-    plot_solutions_and_pareto(file_path)
+        xs, ys = load_solutions(filename)
+        print(f"✓ Caricate {len(xs)} soluzioni dal file {filename}")
+        print(f"  - Dimensione xs: {xs.shape}")
+        print(f"  - Dimensione ys: {ys.shape}\n")
+        
+        # FILTRA SOLO SOLUZIONI PARETO VALIDE
+        print("="*60)
+        print("FILTRO SOLUZIONI")
+        print("="*60)
+        xs, ys = filter_valid_pareto(xs, ys)
+        print(f"\n✓ Dopo filtro: {len(xs)} soluzioni Pareto-ottime valide\n")
+        
+        # VISUALIZZA IL FRONTE DI PARETO
+        plot_pareto_front(ys)
+        
+        # TROVA SOLUZIONI NOTEVOLI
+        print("\n" + "="*60)
+        print("SOLUZIONI NOTEVOLI NEL FRONTE DI PARETO")
+        print("="*60)
+        
+        best_sols = find_best_solutions(xs, ys)
+        
+        for name, (x, y) in best_sols.items():
+            print(f"\n▶ {name}:")
+            print(f"  Obiettivi: f1={y[0]:.4f}, f2={y[1]:.4f}")
+            params = decode_solution(x)
+            print(f"  Satelliti totali: {params['satelliti_totali']}")
+            print(f"  W1: {params['W1_tot_satelliti']} sat (η={params['W1_qualita_eta']:.1f})")
+            print(f"  W2: {params['W2_tot_satelliti']} sat (η={params['W2_qualita_eta']:.1f})")
+        
+        # ESPORTA TUTTO IN CSV
+        print("\n" + "="*60)
+        df = export_to_csv(xs, ys)
+        print(f"\nPrime 5 soluzioni:")
+        print(df[['ID', 'f1_comunicazione', 'f2_costo', 'satelliti_totali']].head())
+        
+    except FileNotFoundError:
+        print(f"❌ File {filename} non trovato!")
+        print("   Assicurati che l'ottimizzazione abbia generato il file .npz")
+        print("   I file vengono salvati nella directory corrente con nomi tipo:")
+        print("   - quantcomm_6372134.npz")
+        print("   - quantcomm_1_100_6372134.npz")
