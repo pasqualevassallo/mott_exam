@@ -1,278 +1,181 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import pygmo as pg
-from glob import glob
-import os
+import pandas as pd
 
-# ==== FUNZIONI PER ANALIZZARE LE SOLUZIONI ====
+# ============================================
+# CARICA LE SOLUZIONI DAL FILE .npz
+# ============================================
 
-def load_best_solution(directory=".", pattern="quantcomm_*.npz"):
-    """Carica il file con l'hypervolume migliore"""
-    files = glob(os.path.join(directory, pattern))
-    
-    if not files:
-        print(f"Nessun file trovato con pattern {pattern}")
-        return None, None, None
-    
-    # Estrai hypervolume dai nomi dei file
-    best_hv = 0
-    best_file = None
-    
-    for f in files:
-        try:
-            # Formato: quantcomm_X_Y_HV.npz
-            hv = int(f.split('_')[-1].replace('.npz', ''))
-            if hv > best_hv:
-                best_hv = hv
-                best_file = f
-        except:
-            continue
-    
-    if best_file:
-        print(f"Miglior file: {best_file}")
-        print(f"Hypervolume: {best_hv / 10000000:.6f}")
-        
-        with np.load(best_file) as data:
-            xs = data['xs']
-            ys = data['ys']
-        
-        return xs, ys, best_file
-    
-    return None, None, None
+def load_solutions(filename):
+    """Carica le soluzioni dal file .npz"""
+    with np.load(filename) as data:
+        xs = data['xs']  # Parametri orbitali
+        ys = data['ys']  # Obiettivi (f1, f2, [c1, c2])
+    return xs, ys
 
-
-def filter_valid_solutions(xs, ys, udp):
-    """Filtra solo le soluzioni che rispettano i vincoli"""
-    valid_indices = []
-    
-    for i, (x, y) in enumerate(zip(xs, ys)):
-        # Ricalcola fitness completa per avere i vincoli
-        x_int = x.copy()
-        x_int[10:] = x_int[10:].astype(int)
-        full_fitness = udp.fitness(x_int)
-        
-        # Verifica vincoli (c1 e c2 devono essere <= 0)
-        if full_fitness[2] <= 0 and full_fitness[3] <= 0:
-            valid_indices.append(i)
-    
-    return xs[valid_indices], ys[valid_indices]
-
+# ============================================
+# ANALIZZA I PARAMETRI ORBITALI
+# ============================================
 
 def decode_solution(x):
-    """Decodifica una soluzione nei suoi parametri"""
+    """Decodifica una soluzione in parametri leggibili"""
     params = {
-        # Walker 1
-        'W1_a': x[0],  # semi-asse maggiore (normalizzato)
-        'W1_e': x[1],  # eccentricità
-        'W1_i': x[2],  # inclinazione (rad)
-        'W1_w': x[3],  # argomento del perigeo (rad)
-        'W1_eta': x[4],  # qualità satelliti
+        # Walker Constellation 1
+        'W1_semiasse_maggiore_km': x[0] * 6371,  # a1 normalizzato
+        'W1_eccentricita': x[1],
+        'W1_inclinazione_deg': np.degrees(x[2]),
+        'W1_arg_perigeo_deg': np.degrees(x[3]),
+        'W1_qualita_eta': x[4],
         
-        # Walker 2
-        'W2_a': x[5],
-        'W2_e': x[6],
-        'W2_i': x[7],
-        'W2_w': x[8],
-        'W2_eta': x[9],
+        # Walker Constellation 2
+        'W2_semiasse_maggiore_km': x[5] * 6371,  # a2 normalizzato
+        'W2_eccentricita': x[6],
+        'W2_inclinazione_deg': np.degrees(x[7]),
+        'W2_arg_perigeo_deg': np.degrees(x[8]),
+        'W2_qualita_eta': x[9],
         
-        # Configurazione costellazioni
-        'W1_S': int(x[10]),  # satelliti per piano
-        'W1_P': int(x[11]),  # numero piani
-        'W1_F': int(x[12]),  # phasing
-        'W2_S': int(x[13]),
-        'W2_P': int(x[14]),
-        'W2_F': int(x[15]),
+        # Configurazione Walker 1
+        'W1_sat_per_piano': int(x[10]),
+        'W1_num_piani': int(x[11]),
+        'W1_phasing': int(x[12]),
+        'W1_tot_satelliti': int(x[10]) * int(x[11]),
+        
+        # Configurazione Walker 2
+        'W2_sat_per_piano': int(x[13]),
+        'W2_num_piani': int(x[14]),
+        'W2_phasing': int(x[15]),
+        'W2_tot_satelliti': int(x[13]) * int(x[14]),
         
         # Rovers
-        'rover_indices': [int(x[16]), int(x[17]), int(x[18]), int(x[19])]
+        'rover_indices': [int(x[16]), int(x[17]), int(x[18]), int(x[19])],
+        
+        # Totali
+        'satelliti_totali': int(x[10])*int(x[11]) + int(x[13])*int(x[14])
     }
-    
-    # Calcola numero totale satelliti
-    params['W1_total'] = params['W1_S'] * params['W1_P']
-    params['W2_total'] = params['W2_S'] * params['W2_P']
-    params['total_sats'] = params['W1_total'] + params['W2_total']
-    
     return params
 
+# ============================================
+# VISUALIZZA IL FRONTE DI PARETO
+# ============================================
 
-def print_solution_details(x, y, udp):
-    """Stampa i dettagli di una soluzione"""
-    params = decode_solution(x)
-    
-    print("\n" + "="*70)
-    print("DETTAGLI SOLUZIONE")
-    print("="*70)
-    
-    print(f"\nOBIETTIVI:")
-    print(f"  J1 (Costo comunicazioni): {y[0]:.6f}")
-    print(f"  J2 (Costo infrastruttura): {y[1]:.6f}")
-    
-    print(f"\nWALKER CONSTELLATION 1:")
-    print(f"  Semi-asse maggiore: {params['W1_a']:.4f} (× {6371} km)")
-    print(f"  Eccentricità: {params['W1_e']:.4f}")
-    print(f"  Inclinazione: {np.degrees(params['W1_i']):.2f}°")
-    print(f"  Arg. perigeo: {np.degrees(params['W1_w']):.2f}°")
-    print(f"  Qualità (eta): {params['W1_eta']:.2f}")
-    print(f"  Configurazione: {params['W1_S']}×{params['W1_P']}×{params['W1_F']}")
-    print(f"  Totale satelliti: {params['W1_total']}")
-    
-    print(f"\nWALKER CONSTELLATION 2:")
-    print(f"  Semi-asse maggiore: {params['W2_a']:.4f} (× {6371} km)")
-    print(f"  Eccentricità: {params['W2_e']:.4f}")
-    print(f"  Inclinazione: {np.degrees(params['W2_i']):.2f}°")
-    print(f"  Arg. perigeo: {np.degrees(params['W2_w']):.2f}°")
-    print(f"  Qualità (eta): {params['W2_eta']:.2f}")
-    print(f"  Configurazione: {params['W2_S']}×{params['W2_P']}×{params['W2_F']}")
-    print(f"  Totale satelliti: {params['W2_total']}")
-    
-    print(f"\nTOTALE SATELLITI: {params['total_sats']}")
-    print(f"ROVER INDICES: {params['rover_indices']}")
-    
-    # Verifica vincoli
-    x_int = x.copy()
-    x_int[10:] = x_int[10:].astype(int)
-    full_fitness = udp.fitness(x_int)
-    
-    print(f"\nVINCOLI:")
-    print(f"  Distanza min rovers: {full_fitness[2]:.2f} {'✓ OK' if full_fitness[2] <= 0 else '✗ VIOLATO'}")
-    print(f"  Distanza min satelliti: {full_fitness[3]:.2f} {'✓ OK' if full_fitness[3] <= 0 else '✗ VIOLATO'}")
-    
-    return params
-
-
-def plot_pareto_front(ys, highlight_indices=None, save_path=None):
+def plot_pareto_front(ys, filename='pareto_front.png'):
     """Visualizza il fronte di Pareto"""
-    ref_point = np.array([1.2, 1.4])
+    plt.figure(figsize=(10, 6))
     
-    fig, ax = plt.subplots(figsize=(10, 8))
+    # Estrai solo f1 e f2 (ignora eventuali vincoli)
+    f1 = ys[:, 0]
+    f2 = ys[:, 1]
     
-    # Punti del fronte di Pareto
-    ax.scatter(ys[:, 0], ys[:, 1], s=50, alpha=0.6, label='Soluzioni valide')
+    plt.scatter(f1, f2, alpha=0.6, s=50)
+    plt.xlabel('f1: Costo Comunicazione (normalizzato)', fontsize=12)
+    plt.ylabel('f2: Costo Infrastruttura (normalizzato)', fontsize=12)
+    plt.title('Fronte di Pareto - Soluzioni Ottimali', fontsize=14)
+    plt.grid(True, alpha=0.3)
     
-    # Evidenzia soluzioni specifiche
-    if highlight_indices is not None:
-        for idx in highlight_indices:
-            ax.scatter(ys[idx, 0], ys[idx, 1], s=200, marker='D', 
-                      edgecolors='red', linewidths=2, alpha=0.8,
-                      label=f'Soluzione {idx}')
+    # Aggiungi punto di riferimento
+    plt.axvline(x=1.2, color='r', linestyle='--', alpha=0.3, label='Ref point')
+    plt.axhline(y=1.4, color='r', linestyle='--', alpha=0.3)
     
-    # Reference point
-    ax.scatter(ref_point[0], ref_point[1], s=200, marker='X', 
-              c='black', label='Reference point', zorder=10)
-    
-    # Calcola hypervolume
-    try:
-        hv = pg.hypervolume(ys)
-        hv_value = hv.compute(ref_point)
-        ax.text(0.95, 0.95, f'Hypervolume: {hv_value:.6f}', 
-               transform=ax.transAxes, ha='right', va='top',
-               bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-               fontsize=12)
-    except:
-        pass
-    
-    ax.set_xlabel('Cost of communications (J1)', fontsize=12)
-    ax.set_ylabel('Cost of infrastructure (J2)', fontsize=12)
-    ax.set_title('Pareto Front - Quantum Communications Constellation', fontsize=14)
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
-    
+    plt.legend()
     plt.tight_layout()
+    plt.savefig(filename, dpi=300)
     plt.show()
     
-    return fig, ax
+    print(f"Grafico salvato in: {filename}")
 
+# ============================================
+# TROVA LE SOLUZIONI "MIGLIORI"
+# ============================================
 
 def find_best_solutions(xs, ys):
-    """Trova le soluzioni migliori secondo diversi criteri"""
-    results = {}
+    """Identifica soluzioni notevoli nel fronte di Pareto"""
     
-    # Miglior J1 (comunicazioni)
-    idx_j1 = np.argmin(ys[:, 0])
-    results['best_j1'] = {
-        'index': idx_j1,
-        'x': xs[idx_j1],
-        'y': ys[idx_j1],
-        'description': 'Miglior costo comunicazioni'
-    }
+    f1 = ys[:, 0]
+    f2 = ys[:, 1]
     
-    # Miglior J2 (infrastruttura)
-    idx_j2 = np.argmin(ys[:, 1])
-    results['best_j2'] = {
-        'index': idx_j2,
-        'x': xs[idx_j2],
-        'y': ys[idx_j2],
-        'description': 'Miglior costo infrastruttura'
-    }
+    # 1. Soluzione con miglior comunicazione (minimo f1)
+    idx_best_comm = np.argmin(f1)
     
-    # Soluzione bilanciata (minima distanza euclidea dall'origine)
-    distances = np.linalg.norm(ys, axis=1)
+    # 2. Soluzione con minor costo (minimo f2)
+    idx_best_cost = np.argmin(f2)
+    
+    # 3. Soluzione "bilanciata" (minima distanza euclidea dall'origine)
+    distances = np.sqrt(f1**2 + f2**2)
     idx_balanced = np.argmin(distances)
-    results['balanced'] = {
-        'index': idx_balanced,
-        'x': xs[idx_balanced],
-        'y': ys[idx_balanced],
-        'description': 'Soluzione bilanciata'
+    
+    solutions = {
+        'Migliore Comunicazione': (xs[idx_best_comm], ys[idx_best_comm]),
+        'Minor Costo': (xs[idx_best_cost], ys[idx_best_cost]),
+        'Bilanciata': (xs[idx_balanced], ys[idx_balanced])
     }
     
-    return results
+    return solutions
 
+# ============================================
+# ESPORTA IN CSV PER ANALISI
+# ============================================
 
-# ==== SCRIPT PRINCIPALE ====
+def export_to_csv(xs, ys, filename='soluzioni_pareto.csv'):
+    """Esporta tutte le soluzioni in CSV"""
+    
+    data = []
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        params = decode_solution(x)
+        row = {
+            'ID': i,
+            'f1_comunicazione': y[0],
+            'f2_costo': y[1],
+            **params
+        }
+        data.append(row)
+    
+    df = pd.DataFrame(data)
+    df.to_csv(filename, index=False)
+    print(f"CSV esportato in: {filename}")
+    return df
+
+# ============================================
+# ESEMPIO DI UTILIZZO
+# ============================================
 
 if __name__ == '__main__':
-    # Importa UDP
-    from constellation_udp import constellation_udp  # Assumendo che sia nel tuo script
     
-    print("Caricamento soluzioni...")
-    xs, ys, filename = load_best_solution()
+    # CARICA IL FILE (sostituisci con il tuo file .npz)
+    filename = 'quantcomm_1_100_6372134.npz'  # O il file più recente generato
     
-    if xs is None:
-        print("Nessuna soluzione trovata!")
-        exit()
-    
-    # Crea UDP per validazione
-    udp = constellation_udp()
-    
-    print(f"\nTrovate {len(xs)} soluzioni nel fronte di Pareto")
-    
-    # Trova le soluzioni migliori
-    print("\n" + "="*70)
-    print("RICERCA SOLUZIONI OTTIMALI")
-    print("="*70)
-    
-    best_solutions = find_best_solutions(xs, ys)
-    
-    # Stampa dettagli delle soluzioni chiave
-    for key, sol in best_solutions.items():
-        print(f"\n{sol['description'].upper()}:")
-        print_solution_details(sol['x'], sol['y'], udp)
-    
-    # Visualizza il fronte di Pareto
-    print("\nGenerazione grafico Pareto Front...")
-    highlight_indices = [sol['index'] for sol in best_solutions.values()]
-    plot_pareto_front(ys, highlight_indices=highlight_indices, 
-                     save_path='pareto_front_analysis.png')
-    
-    # Salva report dettagliato
-    report_path = 'solutions_report.txt'
-    with open(report_path, 'w') as f:
-        f.write("QUANTUM COMMUNICATIONS CONSTELLATION - REPORT SOLUZIONI\n")
-        f.write("="*70 + "\n\n")
-        f.write(f"File sorgente: {filename}\n")
-        f.write(f"Numero soluzioni: {len(xs)}\n\n")
+    try:
+        xs, ys = load_solutions(filename)
+        print(f"✓ Caricate {len(xs)} soluzioni dal file {filename}")
+        print(f"  - Dimensione xs: {xs.shape}")
+        print(f"  - Dimensione ys: {ys.shape}\n")
         
-        for key, sol in best_solutions.items():
-            f.write(f"\n{sol['description'].upper()}\n")
-            f.write("-"*70 + "\n")
-            params = decode_solution(sol['x'])
-            f.write(f"J1: {sol['y'][0]:.6f}, J2: {sol['y'][1]:.6f}\n")
-            f.write(f"Satelliti totali: {params['total_sats']}\n")
-            f.write(f"Walker 1: {params['W1_total']} sat, eta={params['W1_eta']:.2f}\n")
-            f.write(f"Walker 2: {params['W2_total']} sat, eta={params['W2_eta']:.2f}\n\n")
-    
-    print(f"\nReport salvato in: {report_path}")
+        # VISUALIZZA IL FRONTE DI PARETO
+        plot_pareto_front(ys)
+        
+        # TROVA SOLUZIONI NOTEVOLI
+        print("\n" + "="*60)
+        print("SOLUZIONI NOTEVOLI NEL FRONTE DI PARETO")
+        print("="*60)
+        
+        best_sols = find_best_solutions(xs, ys)
+        
+        for name, (x, y) in best_sols.items():
+            print(f"\n▶ {name}:")
+            print(f"  Obiettivi: f1={y[0]:.4f}, f2={y[1]:.4f}")
+            params = decode_solution(x)
+            print(f"  Satelliti totali: {params['satelliti_totali']}")
+            print(f"  W1: {params['W1_tot_satelliti']} sat (η={params['W1_qualita_eta']:.1f})")
+            print(f"  W2: {params['W2_tot_satelliti']} sat (η={params['W2_qualita_eta']:.1f})")
+        
+        # ESPORTA TUTTO IN CSV
+        print("\n" + "="*60)
+        df = export_to_csv(xs, ys)
+        print(f"\nPrime 5 soluzioni:")
+        print(df[['ID', 'f1_comunicazione', 'f2_costo', 'satelliti_totali']].head())
+        
+    except FileNotFoundError:
+        print(f"❌ File {filename} non trovato!")
+        print("   Assicurati che l'ottimizzazione abbia generato il file .npz")
+        print("   I file vengono salvati nella directory corrente con nomi tipo:")
+        print("   - quantcomm_6372134.npz")
+        print("   - quantcomm_1_100_6372134.npz")
