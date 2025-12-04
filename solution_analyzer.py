@@ -2,222 +2,149 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import seaborn as sns
-from matplotlib import cm
+import sys
 
-def load_solution(filepath):
-    """Carica una soluzione da file .npz"""
-    with np.load(filepath) as data:
-        xs = data['xs']
-        ys = data['ys']
-    return xs, ys
+def is_dominated(point, other_points):
+    """Verifica se un punto è dominato da altri punti"""
+    for other in other_points:
+        if all(other <= point) and any(other < point):
+            return True
+    return False
 
-def plot_pareto_fronts(solution_files, title="Fronti di Pareto", 
-                       save_path=None, dark_mode=True):
+def find_pareto_front(objectives):
+    """Trova il fronte di Pareto da un set di obiettivi"""
+    pareto_mask = np.ones(len(objectives), dtype=bool)
+    
+    for i, point in enumerate(objectives):
+        if pareto_mask[i]:
+            # Rimuovi dalla maschera tutti i punti dominati da questo
+            other_points = objectives[pareto_mask]
+            other_indices = np.where(pareto_mask)[0]
+            
+            for j, other in zip(other_indices, other_points):
+                if i != j:
+                    if all(point <= other) and any(point < other):
+                        pareto_mask[j] = False
+    
+    return pareto_mask
+
+def plot_solutions_and_pareto(file_path, dark_mode=True):
     """
-    Visualizza più fronti di Pareto da diversi file di soluzione
+    Visualizza tutte le soluzioni dal file .npz e evidenzia il fronte di Pareto
     
     Args:
-        solution_files: lista di path ai file .npz
-        title: titolo del grafico
-        save_path: percorso dove salvare il grafico (opzionale)
+        file_path: path al file .npz
         dark_mode: usa sfondo scuro
     """
+    
+    # Carica il file
+    with np.load(file_path) as data:
+        xs = data['xs']
+        ys = data['ys']
+    
+    # Estrai gli obiettivi (prime 2 colonne)
+    objectives = ys[:, :2] if ys.shape[1] > 2 else ys
+    
+    # Trova il fronte di Pareto
+    pareto_mask = find_pareto_front(objectives)
+    pareto_points = objectives[pareto_mask]
+    non_pareto_points = objectives[~pareto_mask]
+    
+    # Setup plot
     if dark_mode:
         plt.style.use('dark_background')
-        sns.set_palette("bright")
     
     fig, ax = plt.subplots(figsize=(12, 8))
     
-    # Colori per le diverse soluzioni
-    colors = cm.rainbow(np.linspace(0, 1, len(solution_files)))
+    # Plot soluzioni non-Pareto (in grigio/trasparente)
+    if len(non_pareto_points) > 0:
+        ax.scatter(non_pareto_points[:, 0], non_pareto_points[:, 1], 
+                  c='gray', s=50, alpha=0.3, label='Soluzioni dominate', 
+                  edgecolors='none')
     
-    all_ys = []
+    # Plot fronte di Pareto (evidenziato)
+    ax.scatter(pareto_points[:, 0], pareto_points[:, 1], 
+              c='cyan', s=100, alpha=0.8, label='Fronte di Pareto',
+              edgecolors='white', linewidth=1.5, zorder=5)
     
-    for idx, file_path in enumerate(solution_files):
-        try:
-            xs, ys = load_solution(file_path)
-            
-            # Estrai solo gli obiettivi (prime 2 colonne)
-            if ys.shape[1] > 2:
-                objectives = ys[:, :2]
-            else:
-                objectives = ys
-            
-            all_ys.append(objectives)
-            
-            # Nome file per la leggenda
-            file_name = Path(file_path).stem
-            
-            # Plot delle soluzioni
-            ax.scatter(objectives[:, 0], objectives[:, 1], 
-                      c=[colors[idx]], label=file_name, 
-                      s=50, alpha=0.7, edgecolors='white', linewidth=0.5)
-            
-            # Connetti i punti del fronte
-            sorted_indices = np.argsort(objectives[:, 0])
-            sorted_obj = objectives[sorted_indices]
-            ax.plot(sorted_obj[:, 0], sorted_obj[:, 1], 
-                   c=colors[idx], alpha=0.3, linewidth=1)
-            
-        except Exception as e:
-            print(f"Errore nel caricamento di {file_path}: {e}")
+    # Connetti i punti del fronte di Pareto
+    sorted_indices = np.argsort(pareto_points[:, 0])
+    sorted_pareto = pareto_points[sorted_indices]
+    ax.plot(sorted_pareto[:, 0], sorted_pareto[:, 1], 
+           'c--', alpha=0.5, linewidth=2, zorder=4)
     
     # Reference point
     ref_point = np.array([1.2, 1.4])
     ax.scatter(ref_point[0], ref_point[1], 
-              c='red', s=200, marker='*', 
-              label='Reference Point', zorder=5, 
-              edgecolors='white', linewidth=2)
+              c='red', s=300, marker='*', 
+              label='Reference Point', zorder=6, 
+              edgecolors='yellow', linewidth=2)
     
     # Linee tratteggiate dal reference point
-    ax.axvline(x=ref_point[0], color='red', linestyle='--', alpha=0.3)
-    ax.axhline(y=ref_point[1], color='red', linestyle='--', alpha=0.3)
+    ax.axvline(x=ref_point[0], color='red', linestyle=':', alpha=0.3, linewidth=1)
+    ax.axhline(y=ref_point[1], color='red', linestyle=':', alpha=0.3, linewidth=1)
     
-    ax.set_xlabel('Obiettivo 1: Costo Comunicazione Medio', fontsize=12)
-    ax.set_ylabel('Obiettivo 2: Costo Infrastruttura', fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight='bold')
-    ax.legend(loc='best', fontsize=9)
-    ax.grid(True, alpha=0.3)
+    # Labels e titolo
+    ax.set_xlabel('Obiettivo 1: Costo Comunicazione Medio', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Obiettivo 2: Costo Infrastruttura', fontsize=14, fontweight='bold')
     
-    plt.tight_layout()
+    file_name = Path(file_path).stem
+    ax.set_title(f'Soluzioni e Fronte di Pareto - {file_name}', 
+                fontsize=16, fontweight='bold', pad=20)
     
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
+    # Statistiche nel plot
+    stats_text = f'Soluzioni totali: {len(objectives)}\n'
+    stats_text += f'Fronte di Pareto: {len(pareto_points)}\n'
+    stats_text += f'Dominate: {len(non_pareto_points)}'
     
-    plt.show()
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
+           fontsize=11, verticalalignment='top',
+           bbox=dict(boxstyle='round', facecolor='black', alpha=0.7),
+           color='white')
     
-    return fig, ax, all_ys
-
-def plot_single_pareto(file_path, title=None, save_path=None, dark_mode=True):
-    """Visualizza un singolo fronte di Pareto con dettagli"""
-    
-    if dark_mode:
-        plt.style.use('dark_background')
-    
-    xs, ys = load_solution(file_path)
-    
-    # Estrai obiettivi e vincoli
-    objectives = ys[:, :2]
-    
-    fig = plt.figure(figsize=(15, 5))
-    
-    # Subplot 1: Fronte di Pareto
-    ax1 = plt.subplot(1, 3, 1)
-    scatter = ax1.scatter(objectives[:, 0], objectives[:, 1], 
-                         c=range(len(objectives)), cmap='viridis',
-                         s=100, alpha=0.6, edgecolors='white', linewidth=1)
-    
-    # Connetti i punti
-    sorted_indices = np.argsort(objectives[:, 0])
-    sorted_obj = objectives[sorted_indices]
-    ax1.plot(sorted_obj[:, 0], sorted_obj[:, 1], 
-            'w--', alpha=0.3, linewidth=1)
-    
-    # Reference point
-    ref_point = np.array([1.2, 1.4])
-    ax1.scatter(ref_point[0], ref_point[1], 
-               c='red', s=200, marker='*', label='Reference Point')
-    
-    ax1.set_xlabel('Obiettivo 1: Costo Comunicazione')
-    ax1.set_ylabel('Obiettivo 2: Costo Infrastruttura')
-    ax1.set_title('Fronte di Pareto')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    plt.colorbar(scatter, ax=ax1, label='Indice Soluzione')
-    
-    # Subplot 2: Distribuzione Obiettivo 1
-    ax2 = plt.subplot(1, 3, 2)
-    ax2.hist(objectives[:, 0], bins=20, alpha=0.7, color='cyan', edgecolor='white')
-    ax2.axvline(ref_point[0], color='red', linestyle='--', 
-               label=f'Ref: {ref_point[0]:.2f}')
-    ax2.set_xlabel('Obiettivo 1')
-    ax2.set_ylabel('Frequenza')
-    ax2.set_title('Distribuzione Costo Comunicazione')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    # Subplot 3: Distribuzione Obiettivo 2
-    ax3 = plt.subplot(1, 3, 3)
-    ax3.hist(objectives[:, 1], bins=20, alpha=0.7, color='magenta', edgecolor='white')
-    ax3.axvline(ref_point[1], color='red', linestyle='--', 
-               label=f'Ref: {ref_point[1]:.2f}')
-    ax3.set_xlabel('Obiettivo 2')
-    ax3.set_ylabel('Frequenza')
-    ax3.set_title('Distribuzione Costo Infrastruttura')
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
-    
-    if title:
-        fig.suptitle(title, fontsize=16, fontweight='bold', y=1.02)
+    ax.legend(loc='upper right', fontsize=12, framealpha=0.9)
+    ax.grid(True, alpha=0.3, linestyle='--')
     
     plt.tight_layout()
     
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Grafico salvato in: {save_path}")
+    # Salva
+    output_name = f"{file_name}_pareto_front.png"
+    plt.savefig(output_name, dpi=300, bbox_inches='tight')
+    print(f"Grafico salvato: {output_name}")
     
     plt.show()
     
-    return fig
-
-def compute_hypervolume_evolution(solution_files, ref_point=[1.2, 1.4]):
-    """Calcola e visualizza l'evoluzione dell'hypervolume"""
+    # Stampa statistiche
+    print("\n" + "="*60)
+    print(f"ANALISI FILE: {file_name}")
+    print("="*60)
+    print(f"Soluzioni totali: {len(objectives)}")
+    print(f"Soluzioni sul fronte di Pareto: {len(pareto_points)} ({len(pareto_points)/len(objectives)*100:.1f}%)")
+    print(f"Soluzioni dominate: {len(non_pareto_points)} ({len(non_pareto_points)/len(objectives)*100:.1f}%)")
+    print("\nFronte di Pareto - Range obiettivi:")
+    print(f"  Obiettivo 1: [{pareto_points[:, 0].min():.4f}, {pareto_points[:, 0].max():.4f}]")
+    print(f"  Obiettivo 2: [{pareto_points[:, 1].min():.4f}, {pareto_points[:, 1].max():.4f}]")
+    
+    # Calcola hypervolume se possibile
     try:
         import pygmo as pg
+        valid = [obj for obj in pareto_points if all(obj <= ref_point)]
+        if len(valid) > 0:
+            hv = pg.hypervolume(valid)
+            hv_value = hv.compute(ref_point) * 10000
+            print(f"\nHypervolume: {hv_value:.2f}")
     except ImportError:
-        print("Pygmo non disponibile per il calcolo dell'hypervolume")
-        return None
+        pass
     
-    plt.style.use('dark_background')
+    print("="*60)
     
-    hypervolumes = []
-    iterations = []
-    
-    for file_path in solution_files:
-        try:
-            xs, ys = load_solution(file_path)
-            objectives = ys[:, :2] if ys.shape[1] > 2 else ys
-            
-            # Filtra solo soluzioni valide che dominano il reference point
-            valid = [obj for obj in objectives if all(obj <= ref_point)]
-            
-            if len(valid) > 0:
-                hv = pg.hypervolume(valid)
-                hypervolumes.append(hv.compute(ref_point) * 10000)
-                
-                # Estrai numero iterazione dal nome file
-                file_name = Path(file_path).stem
-                parts = file_name.split('_')
-                if len(parts) > 1 and parts[1].isdigit():
-                    iterations.append(int(parts[1]))
-                else:
-                    iterations.append(len(iterations))
-            
-        except Exception as e:
-            print(f"Errore nel calcolo HV per {file_path}: {e}")
-    
-    if hypervolumes:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(iterations, hypervolumes, 'o-', linewidth=2, markersize=8)
-        ax.set_xlabel('Iterazione', fontsize=12)
-        ax.set_ylabel('Hypervolume × 10000', fontsize=12)
-        ax.set_title('Evoluzione Hypervolume', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
-        
-        return fig, iterations, hypervolumes
-    
-    return None
+    return fig, ax, pareto_points, non_pareto_points
 
-# Esempio d'uso
+
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) < 2:
         print("Uso: python script.py <file.npz>")
-        print("Esempio: python script.py quantcomm_1_100_6372134.npz")
+        print("Esempio: python script.py quantcomm_639739.npz")
         sys.exit(1)
     
     file_path = sys.argv[1]
@@ -226,32 +153,4 @@ if __name__ == "__main__":
         print(f"Errore: file '{file_path}' non trovato")
         sys.exit(1)
     
-    print(f"Analizzando: {file_path}")
-    
-    # Carica e visualizza la soluzione
-    xs, ys = load_solution(file_path)
-    objectives = ys[:, :2] if ys.shape[1] > 2 else ys
-    
-    print(f"Numero di soluzioni: {len(objectives)}")
-    print(f"Obiettivo 1 - Range: [{objectives[:, 0].min():.4f}, {objectives[:, 0].max():.4f}]")
-    print(f"Obiettivo 2 - Range: [{objectives[:, 1].min():.4f}, {objectives[:, 1].max():.4f}]")
-    
-    # Calcola hypervolume se possibile
-    try:
-        import pygmo as pg
-        ref_point = np.array([1.2, 1.4])
-        valid = [obj for obj in objectives if all(obj <= ref_point)]
-        if len(valid) > 0:
-            hv = pg.hypervolume(valid)
-            hv_value = hv.compute(ref_point) * 10000
-            print(f"Hypervolume: {hv_value:.2f}")
-    except ImportError:
-        print("(Pygmo non disponibile per calcolo hypervolume)")
-    
-    # Visualizza analisi dettagliata
-    file_name = Path(file_path).stem
-    plot_single_pareto(file_path, 
-                      title=f"Analisi Fronte di Pareto: {file_name}",
-                      save_path=f"{file_name}_analysis.png")
-    
-    print(f"\nGrafico salvato come: {file_name}_analysis.png")
+    plot_solutions_and_pareto(file_path)
