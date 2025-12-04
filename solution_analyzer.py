@@ -55,30 +55,81 @@ def decode_solution(x):
     return params
 
 # ============================================
+# CALCOLA L'IPERVOLUME
+# ============================================
+
+def calculate_hypervolume(ys, ref_point=[1.2, 1.4]):
+    """Calcola l'ipervolume del fronte di Pareto"""
+    f1 = ys[:, 0]
+    f2 = ys[:, 1]
+    
+    # Filtra punti dominati dal reference point
+    valid_points = (f1 <= ref_point[0]) & (f2 <= ref_point[1])
+    
+    if not np.any(valid_points):
+        return 0.0
+    
+    # Ordina per f1
+    sorted_indices = np.argsort(f1[valid_points])
+    sorted_f1 = f1[valid_points][sorted_indices]
+    sorted_f2 = f2[valid_points][sorted_indices]
+    
+    # Calcola ipervolume
+    hypervolume = 0.0
+    prev_f1 = 0.0
+    
+    for i in range(len(sorted_f1)):
+        width = sorted_f1[i] - prev_f1
+        height = ref_point[1] - sorted_f2[i]
+        hypervolume += width * height
+        prev_f1 = sorted_f1[i]
+    
+    # Aggiungi ultimo rettangolo
+    width = ref_point[0] - prev_f1
+    height = ref_point[1] - sorted_f2[-1]
+    hypervolume += width * height
+    
+    return hypervolume
+
+# ============================================
 # VISUALIZZA IL FRONTE DI PARETO
 # ============================================
 
-def plot_pareto_front(ys, filename='pareto_front.png'):
-    """Visualizza il fronte di Pareto"""
-    plt.figure(figsize=(10, 6))
+def plot_pareto_front(ys, best_solutions, hypervolume, filename='pareto_front.png'):
+    """Visualizza il fronte di Pareto con soluzioni notevoli evidenziate"""
+    plt.figure(figsize=(12, 7))
     
     # Estrai solo f1 e f2 (ignora eventuali vincoli)
     f1 = ys[:, 0]
     f2 = ys[:, 1]
     
-    plt.scatter(f1, f2, alpha=0.6, s=50)
+    # Disegna tutte le soluzioni
+    plt.scatter(f1, f2, alpha=0.4, s=50, c='lightblue', edgecolors='navy', 
+                linewidth=0.5, label='Fronte di Pareto')
+    
+    # Evidenzia le soluzioni notevoli
+    colors = {'Migliore Comunicazione': 'green', 
+              'Minor Costo': 'red', 
+              'Bilanciata': 'orange'}
+    
+    for name, (x, y) in best_solutions.items():
+        plt.scatter(y[0], y[1], s=300, c=colors[name], marker='*', 
+                   edgecolors='black', linewidth=2, 
+                   label=f'{name}\n(f1={y[0]:.4f}, f2={y[1]:.4f})', 
+                   zorder=5)
+    
     plt.xlabel('f1: Costo Comunicazione (normalizzato)', fontsize=12)
     plt.ylabel('f2: Costo Infrastruttura (normalizzato)', fontsize=12)
-    plt.title('Fronte di Pareto - Soluzioni Ottimali', fontsize=14)
+    plt.title(f'Fronte di Pareto - Ipervolume: {hypervolume:.6f}', fontsize=14, fontweight='bold')
     plt.grid(True, alpha=0.3)
     
     # Aggiungi punto di riferimento
-    plt.axvline(x=1.2, color='r', linestyle='--', alpha=0.3, label='Ref point')
-    plt.axhline(y=1.4, color='r', linestyle='--', alpha=0.3)
+    plt.axvline(x=1.2, color='purple', linestyle='--', alpha=0.3, linewidth=2, label='Reference Point')
+    plt.axhline(y=1.4, color='purple', linestyle='--', alpha=0.3, linewidth=2)
     
-    plt.legend()
+    plt.legend(loc='best', fontsize=9, framealpha=0.9)
     plt.tight_layout()
-    plt.savefig(filename, dpi=300)
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.show()
     
     print(f"Grafico salvato in: {filename}")
@@ -110,6 +161,41 @@ def find_best_solutions(xs, ys):
     }
     
     return solutions
+
+# ============================================
+# STAMPA DETTAGLI COMPLETI SOLUZIONE
+# ============================================
+
+def print_solution_details(name, x, y):
+    """Stampa tutti i parametri di una soluzione"""
+    params = decode_solution(x)
+    
+    print(f"\n{'='*70}")
+    print(f"▶ {name.upper()}")
+    print(f"{'='*70}")
+    print(f"Obiettivi: f1={y[0]:.6f}, f2={y[1]:.6f}")
+    print(f"Satelliti totali: {params['satelliti_totali']}")
+    
+    print(f"\n--- WALKER CONSTELLATION 1 ---")
+    print(f"  Satelliti totali: {params['W1_tot_satelliti']} ({params['W1_sat_per_piano']}×{params['W1_num_piani']})")
+    print(f"  Qualità η: {params['W1_qualita_eta']:.3f}")
+    print(f"  Semiasse maggiore: {params['W1_semiasse_maggiore_km']:.2f} km")
+    print(f"  Eccentricità: {params['W1_eccentricita']:.6f}")
+    print(f"  Inclinazione: {params['W1_inclinazione_deg']:.2f}°")
+    print(f"  Argomento perigeo: {params['W1_arg_perigeo_deg']:.2f}°")
+    print(f"  Phasing: {params['W1_phasing']}")
+    
+    print(f"\n--- WALKER CONSTELLATION 2 ---")
+    print(f"  Satelliti totali: {params['W2_tot_satelliti']} ({params['W2_sat_per_piano']}×{params['W2_num_piani']})")
+    print(f"  Qualità η: {params['W2_qualita_eta']:.3f}")
+    print(f"  Semiasse maggiore: {params['W2_semiasse_maggiore_km']:.2f} km")
+    print(f"  Eccentricità: {params['W2_eccentricita']:.6f}")
+    print(f"  Inclinazione: {params['W2_inclinazione_deg']:.2f}°")
+    print(f"  Argomento perigeo: {params['W2_arg_perigeo_deg']:.2f}°")
+    print(f"  Phasing: {params['W2_phasing']}")
+    
+    print(f"\n--- ROVERS ---")
+    print(f"  Indices: {params['rover_indices']}")
 
 # ============================================
 # ESPORTA IN CSV PER ANALISI
@@ -149,26 +235,24 @@ if __name__ == '__main__':
         print(f"  - Dimensione xs: {xs.shape}")
         print(f"  - Dimensione ys: {ys.shape}\n")
         
-        # VISUALIZZA IL FRONTE DI PARETO
-        plot_pareto_front(ys)
-        
         # TROVA SOLUZIONI NOTEVOLI
-        print("\n" + "="*60)
-        print("SOLUZIONI NOTEVOLI NEL FRONTE DI PARETO")
-        print("="*60)
-        
         best_sols = find_best_solutions(xs, ys)
         
+        # CALCOLA IPERVOLUME
+        hypervolume = calculate_hypervolume(ys)
+        print(f"\n{'='*70}")
+        print(f"IPERVOLUME DEL FRONTE DI PARETO: {hypervolume:.6f}")
+        print(f"{'='*70}")
+        
+        # VISUALIZZA IL FRONTE DI PARETO
+        plot_pareto_front(ys, best_sols, hypervolume)
+        
+        # STAMPA DETTAGLI COMPLETI DELLE SOLUZIONI NOTEVOLI
         for name, (x, y) in best_sols.items():
-            print(f"\n▶ {name}:")
-            print(f"  Obiettivi: f1={y[0]:.4f}, f2={y[1]:.4f}")
-            params = decode_solution(x)
-            print(f"  Satelliti totali: {params['satelliti_totali']}")
-            print(f"  W1: {params['W1_tot_satelliti']} sat (η={params['W1_qualita_eta']:.1f})")
-            print(f"  W2: {params['W2_tot_satelliti']} sat (η={params['W2_qualita_eta']:.1f})")
+            print_solution_details(name, x, y)
         
         # ESPORTA TUTTO IN CSV
-        print("\n" + "="*60)
+        print("\n" + "="*70)
         df = export_to_csv(xs, ys)
         print(f"\nPrime 5 soluzioni:")
         print(df[['ID', 'f1_comunicazione', 'f2_costo', 'satelliti_totali']].head())
